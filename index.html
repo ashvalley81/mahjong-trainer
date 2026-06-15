@@ -49,8 +49,9 @@
   .chip.riichi{background:var(--accent2);color:#3a2c00;border-color:var(--accent2);font-weight:700;}
   /* tiles */
   .hand{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:14px 0 4px;}
-  .meld{display:flex;gap:2px;padding:6px;border-radius:8px;background:rgba(0,0,0,.18);}
+  .meld{display:flex;gap:2px;padding:6px;border-radius:8px;background:rgba(0,0,0,.18);align-items:flex-end;}
   .meld.open{outline:1px dashed var(--line);}
+  .legend{font-size:11px;color:var(--muted);margin-top:8px;}
   .agari-wrap{display:flex;flex-direction:column;align-items:center;gap:3px;}
   .agari-wrap .lab{font-size:10px;color:var(--accent2);font-weight:700;}
   .tile{width:34px;height:46px;border-radius:5px;background:#f6f3e9;color:#222;
@@ -672,27 +673,36 @@ document.getElementById('tabs').addEventListener('click',e=>{
 });
 
 function handHTML(hand){
+  const ag=hand.agari;
+  let called=false; // 横向き(明刻/明順)があるか
   let h='<div class="hand">';
   hand.sets.forEach((s,i)=>{
-    const isAgariSet = hand.agari.srcSet===i;
+    const isAgariSet = ag.srcSet===i;
+    // 門前でもシャンポンのロンで完成した刻子は明刻扱い → 和了牌を横向きに
+    const ronShanpon = isAgariSet && ag.wait==='shanpon' && !ag.tsumo;
     h+=`<div class="meld${s.open?' open':''}">`;
     s.tiles.forEach((t,j)=>{
-      const isWin = isAgariSet && eq(t,hand.agari.tile) && j===0; // ハイライトは1枚
-      h+=tileHTML(t,{win:isWin});
+      const isWin = isAgariSet && eq(t,ag.tile) && j===0; // ハイライトは1枚
+      let sideways=false;
+      if(s.open && j===s.tiles.length-1){sideways=true;called=true;}  // 鳴きは末尾を横向き
+      if(ronShanpon && j===0){sideways=true;called=true;}             // ロン明刻は和了牌を横向き
+      h+=tileHTML(t,{win:isWin,sideways});
     });
     h+='</div>';
   });
   // 雀頭
   h+='<div class="meld">';
   hand.pair.tiles.forEach((t,j)=>{
-    const isWin=hand.agari.wait==='tanki'&&j===0;
+    const isWin=ag.wait==='tanki'&&j===0;
     h+=tileHTML(t,{win:isWin});
   });
   h+='</div>';
   h+='</div>';
   // 和了牌表示
-  h+=`<div class="agari-wrap"><span class="lab">${hand.agari.tsumo?'ツモ':'ロン'}和了牌</span>`;
-  h+=`<div class="meld" style="background:none">${tileHTML(hand.agari.tile,{win:true})}</div></div>`;
+  h+=`<div class="agari-wrap"><span class="lab">${ag.tsumo?'ツモ':'ロン'}和了牌</span>`;
+  h+=`<div class="meld" style="background:none">${tileHTML(ag.tile,{win:true})}</div></div>`;
+  if(called)
+    h+=`<div class="legend">※ 横向きの牌＝明刻・明順（鳴き／ロンで完成）。縦だけの刻子は暗刻</div>`;
   return h;
 }
 
