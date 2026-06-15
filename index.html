@@ -633,6 +633,24 @@ let mode='full';
 let cur=null; // 現在の問題
 const stats={full:[0,0],fu:[0,0],yaku:[0,0],score:[0,0]};
 
+// モードごとに現在の問題・入力・答え合わせ状態を保持（タブを移動しても保つ）
+const cache={full:null,fu:null,yaku:null,score:null};
+const INPUT_IDS=['in-han','in-fu','in-score','in-total','in-a','in-ko','in-oya'];
+function captureUI(m){ // 表示中の入力値・結果をキャッシュへ退避
+  if(!cache[m])return;
+  const vals={};
+  INPUT_IDS.forEach(id=>{const el=document.getElementById(id);if(el)vals[id]=el.value;});
+  cache[m].vals=vals;
+  const res=document.getElementById('res');
+  cache[m].resHTML=(res&&res.classList.contains('show'))?res.innerHTML:null;
+}
+function restoreUI(m){ // キャッシュから入力値・結果を復元
+  if(!cache[m])return;
+  const vals=cache[m].vals||{};
+  INPUT_IDS.forEach(id=>{const el=document.getElementById(id);if(el&&vals[id]!=null&&vals[id]!=='')el.value=vals[id];});
+  if(cache[m].resHTML){const res=document.getElementById('res');if(res){res.innerHTML=cache[m].resHTML;res.classList.add('show');}}
+}
+
 // 切り上げ満貫設定 (記憶)
 let KIRIAGE = localStorage.getItem('mj_kiriage')==='1';
 const kiriageBox=document.getElementById('kiriage');
@@ -640,11 +658,14 @@ kiriageBox.checked=KIRIAGE;
 kiriageBox.addEventListener('change',()=>{
   KIRIAGE=kiriageBox.checked;
   localStorage.setItem('mj_kiriage',KIRIAGE?'1':'0');
-  render(); // 表示中の問題を作り直して反映
+  // ルール変更は点数に影響するため全問題を作り直す
+  cache.full=cache.fu=cache.yaku=cache.score=null;
+  render();
 });
 
 document.getElementById('tabs').addEventListener('click',e=>{
   const t=e.target.closest('.tab');if(!t)return;
+  captureUI(mode); // 離れる前に現在モードの状態を保存
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');mode=t.dataset.mode;render();
 });
@@ -693,9 +714,9 @@ function statHTML(key){
 }
 
 /* ---------- モード: 手牌から全部 ---------- */
-function renderFull(){
-  cur=genHand();
-  const hand=cur;
+function renderFull(fresh){
+  if(fresh||!cache.full)cache.full={hand:genHand()};
+  const hand=cache.full.hand;cur=hand;
   app.innerHTML=`
   <div class="card">
     <h2>手牌から全部 計算</h2>
@@ -714,7 +735,7 @@ function renderFull(){
     ${statHTML('full')}
     <div class="result" id="res"></div>
   </div>`;
-  document.getElementById('next').onclick=renderFull;
+  document.getElementById('next').onclick=()=>renderFull(true);
   document.getElementById('check').onclick=()=>{
     const han=+document.getElementById('in-han').value;
     const fu=+document.getElementById('in-fu').value;
@@ -727,6 +748,7 @@ function renderFull(){
     stats.full[1]++; if(allOK)stats.full[0]++;
     showFullResult(hand,sc,{hanOK,fuOK,scoreOK,allOK});
   };
+  restoreUI('full');
 }
 function yakuListHTML(hand){
   let h='<div class="yakulist">';
@@ -763,8 +785,9 @@ function showFullResult(hand,sc,r){
 }
 
 /* ---------- モード: 符計算 ---------- */
-function renderFu(){
-  cur=genHand();const hand=cur;
+function renderFu(fresh){
+  if(fresh||!cache.fu)cache.fu={hand:genHand()};
+  const hand=cache.fu.hand;cur=hand;
   app.innerHTML=`
   <div class="card">
     <h2>符計算 練習</h2>
@@ -781,27 +804,31 @@ function renderFu(){
     ${statHTML('fu')}
     <div class="result" id="res"></div>
   </div>`;
-  document.getElementById('next').onclick=renderFu;
+  document.getElementById('next').onclick=()=>renderFu(true);
   document.getElementById('check').onclick=()=>{
-    if(hand.isYakuman){renderFu();return;}
+    if(hand.isYakuman){renderFu(true);return;}
     const fu=+document.getElementById('in-fu').value;
     const ok=fu===hand.fu.total;stats.fu[1]++;if(ok)stats.fu[0]++;
     const res=document.getElementById('res');res.classList.add('show');
     res.innerHTML=`<div class="verdict ${ok?'ok':'ng'}">${ok?'正解！':'不正解'} 正しくは ${hand.fu.total}符</div>${fuBreakHTML(hand)}`;
   };
+  restoreUI('fu');
 }
 
 /* ---------- モード: 役の判定 ---------- */
-function renderYaku(){
-  cur=genHand();const hand=cur;
-  const candidates=['立直','門前清自摸和','平和','断么九','一盃口','三色同順','一気通貫',
-    '対々和','三暗刻','混全帯么九','純全帯么九','混老頭','小三元','混一色','清一色',
-    '役牌 白','役牌 發','役牌 中','場風','自風','二盃口','三色同刻','大三元','四暗刻','字一色','清老頭'];
-  // 出題用の選択肢: 正解役 + ダミー
-  const correct=new Set(hand.yaku.filter(y=>y.name!=='ドラ').map(y=>y.name));
-  let pool=candidates.filter(c=>!correct.has(c));
-  pool=shuffle(pool).slice(0,Math.max(4,8-correct.size));
-  const choices=shuffle([...correct,...pool]);
+function renderYaku(fresh){
+  if(fresh||!cache.yaku){
+    const hand=genHand();
+    const candidates=['立直','門前清自摸和','平和','断么九','一盃口','三色同順','一気通貫',
+      '対々和','三暗刻','混全帯么九','純全帯么九','混老頭','小三元','混一色','清一色',
+      '役牌 白','役牌 發','役牌 中','場風','自風','二盃口','三色同刻','大三元','四暗刻','字一色','清老頭'];
+    const correct=new Set(hand.yaku.filter(y=>y.name!=='ドラ').map(y=>y.name));
+    let pool=candidates.filter(c=>!correct.has(c));
+    pool=shuffle(pool).slice(0,Math.max(4,8-correct.size));
+    const choices=shuffle([...correct,...pool]);
+    cache.yaku={hand,correct,choices,selected:[],answered:false};
+  }
+  const C=cache.yaku, hand=C.hand; cur=hand;
   app.innerHTML=`
   <div class="card">
     <h2>役の判定 練習</h2>
@@ -809,7 +836,7 @@ function renderYaku(){
     ${metaChips(hand)}
     ${handHTML(hand)}
     <div class="pill-group" id="pills" style="margin-top:12px">
-      ${choices.map(c=>`<div class="pill" data-y="${c}">${c}</div>`).join('')}
+      ${C.choices.map(c=>`<div class="pill${C.selected.includes(c)?' sel':''}" data-y="${c}">${c}</div>`).join('')}
     </div>
     <div class="btns">
       <button class="btn" id="check">答え合わせ</button>
@@ -818,44 +845,49 @@ function renderYaku(){
     ${statHTML('yaku')}
     <div class="result" id="res"></div>
   </div>`;
-  const sel=new Set();
+  const sel=new Set(C.selected);
   document.getElementById('pills').addEventListener('click',e=>{
+    if(C.answered)return; // 答え合わせ後はロック
     const p=e.target.closest('.pill');if(!p)return;
     const y=p.dataset.y;
     if(sel.has(y)){sel.delete(y);p.classList.remove('sel');}
     else{sel.add(y);p.classList.add('sel');}
+    C.selected=[...sel];
   });
-  document.getElementById('next').onclick=renderYaku;
-  document.getElementById('check').onclick=()=>{
+  document.getElementById('next').onclick=()=>renderYaku(true);
+  function grade(updateStats){
     let ok=true;
     document.querySelectorAll('.pill').forEach(p=>{
-      const y=p.dataset.y;const should=correct.has(y);const chose=sel.has(y);
+      const y=p.dataset.y;const should=C.correct.has(y);const chose=sel.has(y);
       p.classList.remove('sel','ng');
       if(should){p.classList.add('sel');if(!chose)ok=false;}
       else if(chose){p.classList.add('sel','ng');ok=false;}
     });
-    stats.yaku[1]++;if(ok)stats.yaku[0]++;
+    if(updateStats){stats.yaku[1]++;if(ok)stats.yaku[0]++;}
     const res=document.getElementById('res');res.classList.add('show');
     res.innerHTML=`<div class="verdict ${ok?'ok':'ng'}">${ok?'正解！':'不正解（緑=正解役 / 赤=誤選択）'}</div>
       <div style="margin-top:6px;font-size:13px;color:var(--muted)">成立役（${hand.han}翻）</div>${yakuListHTML(hand)}`;
-  };
+  }
+  document.getElementById('check').onclick=()=>{ if(C.answered)return; C.answered=true; grade(true); };
+  if(C.answered)grade(false); // 戻ってきたとき答え合わせ済みなら再表示
 }
 
 /* ---------- モード: 符・翻→点数 ---------- */
-function renderScore(){
-  // ランダムな符・翻・条件を生成
-  const fuTable=[20,25,30,40,50,60,70,80,90,100,110];
-  let han,fu;
-  const r=Math.random();
-  if(r<0.7){han=1+rnd(4);fu=pick([20,25,30,40,50,60,70]);}
-  else{han=5+rnd(9);fu=40;}
-  // 20符はツモ平和/ロン平和の特殊 → 1翻20符ロンは存在しないので調整
-  if(fu===20&&han<5){ /* 平和ツモ前提として2翻以上 */ if(han<2)han=2; }
-  if(fu===25&&han<2)han=2;
-  const dealer=Math.random()<0.4;
-  const tsumo=Math.random()<0.5;
-  const sc=scoreCalc(han,fu,dealer,tsumo,KIRIAGE);
-  cur={han,fu,dealer,tsumo,sc};
+function renderScore(fresh){
+  if(fresh||!cache.score){
+    let han,fu;
+    const r=Math.random();
+    if(r<0.7){han=1+rnd(4);fu=pick([20,25,30,40,50,60,70]);}
+    else{han=5+rnd(9);fu=40;}
+    // 20符はツモ平和/ロン平和の特殊 → 1翻20符ロンは存在しないので調整
+    if(fu===20&&han<5){ if(han<2)han=2; }
+    if(fu===25&&han<2)han=2;
+    const dealer=Math.random()<0.4;
+    const tsumo=Math.random()<0.5;
+    const sc=scoreCalc(han,fu,dealer,tsumo,KIRIAGE);
+    cache.score={han,fu,dealer,tsumo,sc};
+  }
+  const {han,fu,dealer,tsumo,sc}=cache.score; cur=cache.score;
   app.innerHTML=`
   <div class="card">
     <h2>符・翻 → 点数</h2>
@@ -882,7 +914,7 @@ function renderScore(){
     ${statHTML('score')}
     <div class="result" id="res"></div>
   </div>`;
-  document.getElementById('next').onclick=renderScore;
+  document.getElementById('next').onclick=()=>renderScore(true);
   document.getElementById('check').onclick=()=>{
     const total=+document.getElementById('in-total').value;
     let ok = total===sc.total;
@@ -893,6 +925,7 @@ function renderScore(){
       <div class="break"><div class="ln"><span>合計</span><span>${sc.total}点</span></div>
       <div class="ln"><span>基本点(base)</span><span>${sc.base}</span></div></div>`;
   };
+  restoreUI('score');
 }
 
 /* ---------- モード: 早見表 ---------- */
