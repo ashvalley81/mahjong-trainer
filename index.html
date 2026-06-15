@@ -282,8 +282,9 @@ function tryGen(opt){
   const hand={round,seat,closed,sets,pair,agari,
     dealer: seat===1, // 親=自風東
   };
+  hand.riichi = closed && Math.random()<0.75; // 立直宣言の有無を先に決定
   assignDora(hand);
-  analyze(hand);
+  solveAndAssign(hand); // 高点法で最高点の解釈を答えにする
   return hand;
 }
 
@@ -358,7 +359,7 @@ function tryGenGuaranteed(){
     {type:'shuntsu',tiles:[T('s',3),T('s',4),T('s',5)],open:false},
   ];
   const pair={tiles:[T('p',2),T('p',2)]};
-  const hand={round:1,seat:2,closed:true,sets,pair,dealer:false,
+  const hand={round:1,seat:2,closed:true,sets,pair,dealer:false,riichi:false,
     doraIndicator:T('m',9),dora:0, // 9m→ドラ1m(手牌になし)
     agari:{tile:T('s',5),tsumo:false,wait:'ryanmen',srcSet:3}};
   analyze(hand);
@@ -385,9 +386,8 @@ function analyze(hand){
   const anyHonor=all.some(isHonor);
   const noHonor=!anyHonor;
 
-  // 立直 (門前・ロン/ツモ問わず, ランダム付与)
-  let riichi=false;
-  if(closed && Math.random()<0.75){riichi=true;add('立直',1);}
+  // 立直 (門前のみ。宣言の有無は hand.riichi に事前決定)
+  if(closed && hand.riichi){add('立直',1);}
   // 門前清自摸和
   if(closed && agari.tsumo){add('門前清自摸和',1);}
 
@@ -466,7 +466,6 @@ function analyze(hand){
   if(everyTermHonor && all.every(isHonor))yakuman.push({name:'字一色',han:13});
   if(all.every(isTerminal)&&koutsus.length===4)yakuman.push({name:'清老頭',han:13});
 
-  hand.riichi=riichi;
   if(yakuman.length){
     hand.yaku=yakuman;
     hand.han=yakuman.reduce((a,y)=>a+y.han,0);
@@ -481,6 +480,108 @@ function analyze(hand){
   hand.yaku=yaku;
   hand.han=yaku.reduce((a,y)=>a+y.han,0);
   hand.fu=computeFu(hand);
+}
+
+/* ============================================================
+   高点法ソルバー: 手牌を全分解し最も高い解釈を採用
+   ============================================================ */
+function countMap(tiles){
+  const c={m:Array(10).fill(0),p:Array(10).fill(0),s:Array(10).fill(0),z:Array(8).fill(0)};
+  tiles.forEach(t=>c[t.suit][t.n]++);
+  return c;
+}
+function cloneCounts(c){return {m:c.m.slice(),p:c.p.slice(),s:c.s.slice(),z:c.z.slice()};}
+const _SUITS4=['m','p','s','z'];
+function firstNonEmpty(c){
+  for(const s of _SUITS4){const mx=s==='z'?7:9;for(let n=1;n<=mx;n++)if(c[s][n]>0)return[s,n];}
+  return null;
+}
+// 雀頭を固定した残り牌を面子に全分解（複数解を列挙）
+function decompose(tiles, needMelds){
+  const base=countMap(tiles);
+  const out=[];
+  function meldsAll(c){
+    const res=[];
+    (function rec(o){
+      const ft=firstNonEmpty(c);
+      if(!ft){ res.push(o.map(m=>({type:m.type,tiles:m.tiles.map(t=>T(t.suit,t.n)),open:false}))); return; }
+      const [s,n]=ft;
+      if(c[s][n]>=3){c[s][n]-=3;o.push({type:'koutsu',tiles:[T(s,n),T(s,n),T(s,n)]});rec(o);o.pop();c[s][n]+=3;}
+      if(s!=='z'&&n<=7&&c[s][n+1]>0&&c[s][n+2]>0){
+        c[s][n]--;c[s][n+1]--;c[s][n+2]--;
+        o.push({type:'shuntsu',tiles:[T(s,n),T(s,n+1),T(s,n+2)]});rec(o);o.pop();
+        c[s][n]++;c[s][n+1]++;c[s][n+2]++;
+      }
+    })([]);
+    return res;
+  }
+  for(const s of _SUITS4){const mx=s==='z'?7:9;for(let pn=1;pn<=mx;pn++){
+    if(base[s][pn]>=2){
+      const c=cloneCounts(base); c[s][pn]-=2;
+      meldsAll(c).forEach(ms=>{ if(ms.length===needMelds) out.push({pair:[T(s,pn),T(s,pn)],melds:ms}); });
+    }
+  }}
+  return out;
+}
+// 順子内の和了牌から待ち種別を判定
+function shuntsuWait(tiles, wt){
+  const a=tiles[0].n;
+  if(wt.n===a+1)return 'kanchan';
+  if(wt.n===a)   return (a===7)?'penchan':'ryanmen'; // 89→7
+  return (a===1)?'penchan':'ryanmen';                // 12→3
+}
+// 全解釈のうち最高点になるものを返す
+function solveBest(ctx){
+  const need=4-ctx.calledMelds.length;
+  const decomps=decompose(ctx.concealedTiles, need);
+  let best=null, bestPts=-1;
+  for(const d of decomps){
+    const groups=[];
+    d.melds.forEach((m,idx)=>groups.push({kind:'meld',idx,m}));
+    groups.push({kind:'pair'});
+    for(const g of groups){
+      let wait;
+      if(g.kind==='pair'){ if(!eq(d.pair[0],ctx.winTile))continue; wait='tanki'; }
+      else {
+        const m=g.m;
+        if(!m.tiles.some(t=>eq(t,ctx.winTile)))continue;
+        wait = m.type==='koutsu' ? 'shanpon' : shuntsuWait(m.tiles, ctx.winTile);
+      }
+      const decompSets=d.melds.map(m=>({type:m.type,tiles:m.tiles.map(t=>T(t.suit,t.n)),open:false}));
+      const sets=[...ctx.calledMelds, ...decompSets];
+      const srcSet = g.kind==='pair'? -1 : ctx.calledMelds.length + g.idx;
+      const hand2={round:ctx.round,seat:ctx.seat,closed:ctx.closed,dealer:ctx.dealer,
+        dora:ctx.dora,riichi:ctx.riichi,sets,
+        pair:{tiles:[T(d.pair[0].suit,d.pair[0].n),T(d.pair[0].suit,d.pair[0].n)]},
+        doraIndicator:ctx.doraIndicator,
+        agari:{tile:T(ctx.winTile.suit,ctx.winTile.n),tsumo:ctx.tsumo,wait,srcSet}};
+      analyze(hand2);
+      if(hand2.yaku.filter(y=>y.name!=='ドラ').length===0)continue; // 役なしは和了不可
+      const fu = hand2.isYakuman?0:hand2.fu.total;
+      const sc = scoreCalc(hand2.han, fu, hand2.dealer, ctx.tsumo, false);
+      const pts = sc.total*1000 + fu; // 同点なら符が高い解釈
+      if(pts>bestPts){ bestPts=pts; best=hand2; }
+    }
+  }
+  return best;
+}
+// 生成した手牌に高点法の答えを割り当てる
+function solveAndAssign(hand){
+  const called=hand.sets.filter(s=>s.open);
+  const concealed=[];
+  hand.sets.forEach(s=>{ if(!s.open) s.tiles.forEach(t=>concealed.push(t)); });
+  hand.pair.tiles.forEach(t=>concealed.push(t));
+  const ctx={round:hand.round,seat:hand.seat,closed:hand.closed,dealer:hand.dealer,
+    dora:hand.dora,riichi:hand.riichi,doraIndicator:hand.doraIndicator,
+    calledMelds:called,concealedTiles:concealed,
+    winTile:hand.agari.tile,tsumo:hand.agari.tsumo};
+  const best=solveBest(ctx);
+  if(best){
+    hand.sets=best.sets; hand.pair=best.pair; hand.agari=best.agari;
+    hand.yaku=best.yaku; hand.han=best.han; hand.fu=best.fu; hand.isYakuman=best.isYakuman;
+  } else {
+    analyze(hand); // フォールバック
+  }
 }
 
 function hasSanshokuDoujun(shuntsus){
@@ -734,7 +835,7 @@ function renderFull(fresh){
   app.innerHTML=`
   <div class="card">
     <h2>手牌から全部 計算</h2>
-    <div class="hint">牌姿を見て、役・翻・符・点数を自分で計算しましょう。ハイライトが和了牌、<b>ドラ表示牌の次の牌がドラ</b>（翻に加算）。</div>
+    <div class="hint">牌姿を見て、役・翻・符・点数を自分で計算しましょう。ハイライトが和了牌、<b>ドラ表示牌の次の牌がドラ</b>（翻に加算）。複数の読みができる手は<b>高点法</b>（最も高くなる解釈）で計算します。</div>
     ${metaChips(hand)}
     ${handHTML(hand)}
     <div class="row" style="margin-top:14px">
@@ -805,7 +906,7 @@ function renderFu(fresh){
   app.innerHTML=`
   <div class="card">
     <h2>符計算 練習</h2>
-    <div class="hint">この手牌の符を計算してください（平和=20/30、七対子=25など）。</div>
+    <div class="hint">この手牌の符を計算してください（平和=20/30、七対子=25など）。複数の読みができる手は<b>高点法</b>で最も高くなる符になります。</div>
     ${metaChips(hand)}
     ${handHTML(hand)}
     <div class="row" style="margin-top:14px">
