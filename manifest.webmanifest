@@ -1,0 +1,16 @@
+{
+  "name": "麻雀 点数計算トレーナー",
+  "short_name": "点数計算",
+  "description": "符・翻・点数・役を実戦形式で練習する麻雀点数計算トレーナー",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1f17",
+  "theme_color": "#0f1f17",
+  "icons": [
+    { "src": "icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" }
+  ]
+}
